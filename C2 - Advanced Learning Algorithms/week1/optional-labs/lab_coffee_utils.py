@@ -1,11 +1,15 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import torch
 plt.style.use('./deeplearning.mplstyle')
-import tensorflow as tf
-from tensorflow.keras.activations import sigmoid
 from matplotlib import cm
 import matplotlib.colors as colors
 from lab_utils_common import dlc
+
+
+def sigmoid(x):
+    return 1 / (1 + np.exp(-x))
+
 
 def load_coffee_data():
     """ Creates a coffee roasting data set.
@@ -17,7 +21,7 @@ def load_coffee_data():
     X[:,1] = X[:,1] * 4 + 11.5          # 12-15 min is best
     X[:,0] = X[:,0] * (285-150) + 150  # 350-500 F (175-260 C) is best
     Y = np.zeros(len(X))
-    
+
     i=0
     for t,d in X:
         y = -3/(260-175)*t + 21
@@ -34,7 +38,7 @@ def plt_roast(X,Y):
     colormap = np.array(['r', 'b'])
     fig, ax = plt.subplots(1,1,)
     ax.scatter(X[Y==1,0],X[Y==1,1], s=70, marker='x', c='red', label="Good Roast" )
-    ax.scatter(X[Y==0,0],X[Y==0,1], s=100, marker='o', facecolors='none', 
+    ax.scatter(X[Y==0,0],X[Y==0,1], s=100, marker='o', facecolors='none',
                edgecolors=dlc["dldarkblue"],linewidth=1,  label="Bad Roast")
     tr = np.linspace(175,260,50)
     ax.plot(tr, (-3/85) * tr + 21, color=dlc["dlpurple"],linewidth=1)
@@ -58,9 +62,12 @@ def plt_prob(ax,fwb):
     for i in range(tmp_x0.shape[0]):
         for j in range(tmp_x1.shape[1]):
             x = np.array([[tmp_x0[i,j],tmp_x1[i,j]]])
-            z[i,j] = fwb(x)
-
-
+            try:
+                z[i,j] = fwb(x)
+            except TypeError:  # expects tensor instead of numpy
+            #     z[i, j] = fwb(torch.from_numpy(x))
+            # except RuntimeError:  #x expects CUDA device
+                z[i,j] = fwb(torch.tensor(x, dtype=torch.float32, device="cuda"))
     cmap = plt.get_cmap('Blues')
     new_cmap = truncate_colormap(cmap, 0.0, 0.5)
     pcm = ax.pcolormesh(tmp_x0, tmp_x1, z,
@@ -82,7 +89,7 @@ def plt_layer(X,Y,W1,b1,norm_l):
         layerf= lambda x : sigmoid(np.dot(norm_l(x),W1[:,i]) + b1[i])
         plt_prob(ax[i], layerf)
         ax[i].scatter(X[Y==1,0],X[Y==1,1], s=70, marker='x', c='red', label="Good Roast" )
-        ax[i].scatter(X[Y==0,0],X[Y==0,1], s=100, marker='o', facecolors='none', 
+        ax[i].scatter(X[Y==0,0],X[Y==0,1], s=100, marker='o', facecolors='none',
                    edgecolors=dlc["dldarkblue"],linewidth=1,  label="Bad Roast")
         tr = np.linspace(175,260,50)
         ax[i].plot(tr, (-3/85) * tr + 21, color=dlc["dlpurple"],linewidth=2)
@@ -92,13 +99,20 @@ def plt_layer(X,Y,W1,b1,norm_l):
         ax[i].set_xlabel("Temperature \n(Celsius)",size=12)
     ax[0].set_ylabel("Duration \n(minutes)",size=12)
     plt.show()
-        
+
 def plt_network(X,Y,netf):
     fig, ax = plt.subplots(1,2,figsize=(16,4))
     Y = Y.reshape(-1,)
     plt_prob(ax[0], netf)
+    if not isinstance(X, np.ndarray):
+        if X.get_device() != -1:  # cuda
+            X = X.cpu().numpy()
+            Y = Y.cpu().numpy()
+        else:  # cpu
+            X = X.numpy()
+            Y = Y.numpy()
     ax[0].scatter(X[Y==1,0],X[Y==1,1], s=70, marker='x', c='red', label="Good Roast" )
-    ax[0].scatter(X[Y==0,0],X[Y==0,1], s=100, marker='o', facecolors='none', 
+    ax[0].scatter(X[Y==0,0],X[Y==0,1], s=100, marker='o', facecolors='none',
                    edgecolors=dlc["dldarkblue"],linewidth=1,  label="Bad Roast")
     ax[0].plot(X[:,0], (-3/85) * X[:,0] + 21, color=dlc["dlpurple"],linewidth=1)
     ax[0].axhline(y= 12, color=dlc["dlpurple"], linewidth=1)
@@ -111,10 +125,13 @@ def plt_network(X,Y,netf):
     ax[1].plot(X[:,0], (-3/85) * X[:,0] + 21, color=dlc["dlpurple"],linewidth=1)
     ax[1].axhline(y= 12, color=dlc["dlpurple"], linewidth=1)
     ax[1].axvline(x=175, color=dlc["dlpurple"], linewidth=1)
-    fwb = netf(X)
+    try:
+        fwb = netf(X)
+    except TypeError:
+        fwb = netf(torch.tensor(X, dtype=torch.float32, device="cuda"))
     yhat = (fwb > 0.5).astype(int)
     ax[1].scatter(X[yhat[:,0]==1,0],X[yhat[:,0]==1,1], s=70, marker='x', c='orange', label="Predicted Good Roast" )
-    ax[1].scatter(X[yhat[:,0]==0,0],X[yhat[:,0]==0,1], s=100, marker='o', facecolors='none', 
+    ax[1].scatter(X[yhat[:,0]==0,0],X[yhat[:,0]==0,1], s=100, marker='o', facecolors='none',
                    edgecolors=dlc["dldarkblue"],linewidth=1,  label="Bad Roast")
     ax[1].set_title(f"network decision")
     ax[1].set_xlabel("Temperature \n(Celsius)",size=12)
@@ -137,11 +154,11 @@ def plt_output_unit(W,b):
         for j in range(steps):
             for k in range(steps):
                 v = np.array([x[i,j,k],y[i,j,k],z[i,j,k]])
-                d[i,j,k] = tf.keras.activations.sigmoid(np.dot(v,W[:,0])+b).numpy()
+                d[i,j,k] = sigmoid(np.dot(v,W[:,0])+b).numpy()
     pcm = ax.scatter(x, y, z, c=d, cmap=cmap, alpha = 1 )
-    ax.set_xlabel("unit 0"); 
-    ax.set_ylabel("unit 1"); 
-    ax.set_zlabel("unit 2"); 
+    ax.set_xlabel("unit 0");
+    ax.set_ylabel("unit 1");
+    ax.set_zlabel("unit 2");
     ax.view_init(30, -120)
     ax.figure.colorbar(pcm, ax=ax)
     ax.set_title(f"Layer 2, output unit")
